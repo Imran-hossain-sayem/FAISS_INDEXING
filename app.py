@@ -229,25 +229,48 @@ if search_button or user_query:
         )
         st.plotly_chart(fig, use_container_width=True)
         
-        # Accuracy metrics
+        # Precision, Recall, and Accuracy metrics
         knn_set = set(results['knn']['indices'])
         
         metrics = {}
         for name, result in results.items():
             if name != 'knn':
                 pred_set = set(result['indices'])
-                precision = len(knn_set & pred_set) / len(pred_set)
+                
+                # Calculate Precision@K
+                relevant_retrieved = len(knn_set & pred_set)
+                precision = relevant_retrieved / len(pred_set) if len(pred_set) > 0 else 0
+                
+                # Calculate Recall@K
+                recall = relevant_retrieved / len(knn_set) if len(knn_set) > 0 else 0
+                
+                # Calculate Accuracy@K (whether the set of retrieved items exactly matches ground truth)
                 accuracy = 1 if knn_set == pred_set else 0
+                
                 metrics[name] = {
                     'precision': precision,
+                    'recall': recall,
                     'accuracy': accuracy
                 }
         
         if metrics:
             df_metrics = pd.DataFrame(metrics).T
-            df_metrics.columns = ['Precision@K', 'Accuracy@K']
+            df_metrics.columns = ['Precision@K', 'Recall@K', 'Accuracy@K']
             df_metrics = df_metrics.round(3)
-            st.dataframe(df_metrics, use_container_width=True)
+            
+            # Highlight the metrics
+            st.dataframe(
+                df_metrics.style.background_gradient(cmap='Blues', subset=['Precision@K', 'Recall@K']),
+                use_container_width=True
+            )
+            
+            # Add a note about the metrics
+            st.caption("""
+            **Metrics Explanation:**
+            - **Precision@K**: Fraction of retrieved items that are relevant (in ground truth)
+            - **Recall@K**: Fraction of relevant items that were retrieved
+            - **Accuracy@K**: Whether the retrieved set exactly matches the ground truth
+            """)
     
     # Category Distribution
     st.subheader("📊 Category Distribution of Results")
@@ -265,6 +288,33 @@ if search_button or user_query:
         ])
         fig.update_layout(height=400)
         st.plotly_chart(fig, use_container_width=True)
+    
+    # Add Recall@K visualization
+    st.subheader("📈 Recall@K Comparison")
+    
+    # Create a bar chart for Recall@K
+    recall_data = {}
+    for name, metric in metrics.items():
+        recall_data[name] = metric['recall']
+    
+    if recall_data:
+        fig_recall = go.Figure(data=[
+            go.Bar(
+                x=list(recall_data.keys()),
+                y=list(recall_data.values()),
+                text=[f"{r:.3f}" for r in recall_data.values()],
+                textposition='auto',
+                marker_color=['#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
+            )
+        ])
+        fig_recall.update_layout(
+            title="Recall@K by Index Type",
+            xaxis_title="Index Type",
+            yaxis_title="Recall@K",
+            yaxis_range=[0, 1],
+            height=300
+        )
+        st.plotly_chart(fig_recall, use_container_width=True)
 
 # Add information at bottom
 st.markdown("---")
@@ -273,6 +323,8 @@ st.markdown("""
 - Uses FAISS for efficient similarity search on book embeddings
 - Compares different indexing methods: KNN (ground truth), IVF, PQ, IVF-PQ, and HNSW
 - All embeddings are generated using the `all-MiniLM-L6-v2` model from Sentence Transformers
+- **Precision@K**: Measures accuracy of retrieved results
+- **Recall@K**: Measures completeness of retrieved results
 """)
 
 # Display all books in expander
