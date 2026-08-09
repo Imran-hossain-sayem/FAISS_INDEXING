@@ -146,6 +146,27 @@ def create_indices(embeddings, D):
 
 indices, index_times = create_indices(embeddings, D)
 
+# Define metric calculation functions as per the notebook
+def calculate_accuracy_at_k(ground_truth_indices, predicted_indices):
+    correct = 0
+    ground_truth_set = set(ground_truth_indices)
+    for idx in predicted_indices:
+        if idx in ground_truth_set:
+            correct += 1
+    return correct / len(predicted_indices)
+
+def calculate_precision_at_k(ground_truth_indices, predicted_indices):
+    ground_truth_set = set(ground_truth_indices)
+    predicted_set = set(predicted_indices)
+    relevant_retrieved = len(ground_truth_set & predicted_set)
+    return relevant_retrieved / len(predicted_indices)
+
+def calculate_recall_at_k(ground_truth_indices, predicted_indices):
+    ground_truth_set = set(ground_truth_indices)
+    predicted_set = set(predicted_indices)
+    intersection = ground_truth_set & predicted_set
+    return len(intersection) / len(ground_truth_set)
+
 # Sidebar
 st.sidebar.header("🔍 Search Settings")
 user_query = st.sidebar.text_input("Enter your book query:", value="A book about science")
@@ -167,24 +188,14 @@ if search_button or user_query:
     query_times = {}
     
     for name, index in indices.items():
-        if name in ['knn', 'hnsw']:
-            start = time.perf_counter()
-            distances, indices_result = index.search(query_embedding, K)
-            query_times[name] = (time.perf_counter() - start) * 1000
-            results[name] = {
-                'indices': indices_result[0],
-                'distances': distances[0],
-                'books': [book_names[i] for i in indices_result[0]]
-            }
-        else:  # IVF, PQ, IVFPQ
-            start = time.perf_counter()
-            distances, indices_result = index.search(query_embedding, K)
-            query_times[name] = (time.perf_counter() - start) * 1000
-            results[name] = {
-                'indices': indices_result[0],
-                'distances': distances[0],
-                'books': [book_names[i] for i in indices_result[0]]
-            }
+        start = time.perf_counter()
+        distances, indices_result = index.search(query_embedding, K)
+        query_times[name] = (time.perf_counter() - start) * 1000
+        results[name] = {
+            'indices': indices_result[0],
+            'distances': distances[0],
+            'books': [book_names[i] for i in indices_result[0]]
+        }
     
     # Display results
     col1, col2 = st.columns([2, 1])
@@ -229,23 +240,18 @@ if search_button or user_query:
         )
         st.plotly_chart(fig, use_container_width=True)
         
-        # Precision, Recall, and Accuracy metrics
-        knn_set = set(results['knn']['indices'])
+        # Calculate metrics using the notebook functions
+        knn_indices = results['knn']['indices']
         
         metrics = {}
         for name, result in results.items():
             if name != 'knn':
-                pred_set = set(result['indices'])
+                predicted_indices = result['indices']
                 
-                # Calculate Precision@K
-                relevant_retrieved = len(knn_set & pred_set)
-                precision = relevant_retrieved / len(pred_set) if len(pred_set) > 0 else 0
-                
-                # Calculate Recall@K
-                recall = relevant_retrieved / len(knn_set) if len(knn_set) > 0 else 0
-                
-                # Calculate Accuracy@K (whether the set of retrieved items exactly matches ground truth)
-                accuracy = 1 if knn_set == pred_set else 0
+                # Calculate metrics using the exact functions from the notebook
+                precision = calculate_precision_at_k(knn_indices, predicted_indices)
+                recall = calculate_recall_at_k(knn_indices, predicted_indices)
+                accuracy = calculate_accuracy_at_k(knn_indices, predicted_indices)
                 
                 metrics[name] = {
                     'precision': precision,
@@ -258,11 +264,39 @@ if search_button or user_query:
             df_metrics.columns = ['Precision@K', 'Recall@K', 'Accuracy@K']
             df_metrics = df_metrics.round(3)
             
-            # Highlight the metrics
-            st.dataframe(
-                df_metrics.style.background_gradient(cmap='Blues', subset=['Precision@K', 'Recall@K']),
-                use_container_width=True
-            )
+            # Display metrics
+            st.dataframe(df_metrics, use_container_width=True)
+            
+            # Add colored indicators using markdown
+            st.markdown("**🏆 Best Performers:**")
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                best_precision = df_metrics['Precision@K'].max()
+                best_precision_idx = df_metrics['Precision@K'].idxmax()
+                st.metric(
+                    "Best Precision@K",
+                    f"{best_precision:.3f}",
+                    f"{best_precision_idx}"
+                )
+            
+            with col2:
+                best_recall = df_metrics['Recall@K'].max()
+                best_recall_idx = df_metrics['Recall@K'].idxmax()
+                st.metric(
+                    "Best Recall@K",
+                    f"{best_recall:.3f}",
+                    f"{best_recall_idx}"
+                )
+            
+            with col3:
+                best_accuracy = df_metrics['Accuracy@K'].max()
+                best_accuracy_idx = df_metrics['Accuracy@K'].idxmax()
+                st.metric(
+                    "Best Accuracy@K",
+                    f"{best_accuracy:.3f}",
+                    f"{best_accuracy_idx}"
+                )
             
             # Add a note about the metrics
             st.caption("""
@@ -315,6 +349,32 @@ if search_button or user_query:
             height=300
         )
         st.plotly_chart(fig_recall, use_container_width=True)
+    
+    # Add Precision@K visualization
+    st.subheader("📈 Precision@K Comparison")
+    
+    precision_data = {}
+    for name, metric in metrics.items():
+        precision_data[name] = metric['precision']
+    
+    if precision_data:
+        fig_precision = go.Figure(data=[
+            go.Bar(
+                x=list(precision_data.keys()),
+                y=list(precision_data.values()),
+                text=[f"{p:.3f}" for p in precision_data.values()],
+                textposition='auto',
+                marker_color=['#1f77b4', '#2ca02c', '#d62728', '#9467bd']
+            )
+        ])
+        fig_precision.update_layout(
+            title="Precision@K by Index Type",
+            xaxis_title="Index Type",
+            yaxis_title="Precision@K",
+            yaxis_range=[0, 1],
+            height=300
+        )
+        st.plotly_chart(fig_precision, use_container_width=True)
 
 # Add information at bottom
 st.markdown("---")
@@ -323,8 +383,9 @@ st.markdown("""
 - Uses FAISS for efficient similarity search on book embeddings
 - Compares different indexing methods: KNN (ground truth), IVF, PQ, IVF-PQ, and HNSW
 - All embeddings are generated using the `all-MiniLM-L6-v2` model from Sentence Transformers
-- **Precision@K**: Measures accuracy of retrieved results
-- **Recall@K**: Measures completeness of retrieved results
+- **Precision@K**: Fraction of retrieved items that are relevant (in ground truth)
+- **Recall@K**: Fraction of relevant items that were retrieved
+- **Accuracy@K**: Whether the retrieved set exactly matches the ground truth
 """)
 
 # Display all books in expander
