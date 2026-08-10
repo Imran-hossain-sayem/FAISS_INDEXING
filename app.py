@@ -92,58 +92,6 @@ texts, book_names, embeddings, model = create_embeddings(books)
 
 N, D = embeddings.shape
 
-# Create FAISS indices with configurable parameters
-@st.cache_resource
-def create_indices(embeddings, D, params):
-    indices = {}
-    times = {}
-    
-    # KNN (Ground Truth)
-    start = time.perf_counter()
-    knn_index = faiss.IndexFlatL2(D)
-    knn_index.add(embeddings)
-    times['knn'] = (time.perf_counter() - start) * 1000
-    indices['knn'] = knn_index
-    
-    # IVF
-    nlist = params['ivf_nlist']
-    quantizer = faiss.IndexFlatL2(D)
-    ivf_index = faiss.IndexIVFFlat(quantizer, D, nlist, faiss.METRIC_L2)
-    start = time.perf_counter()
-    ivf_index.train(embeddings)
-    ivf_index.add(embeddings)
-    times['ivf_training'] = (time.perf_counter() - start) * 1000
-    ivf_index.nprobe = params['ivf_nprobe']
-    indices['ivf'] = ivf_index
-    
-    # PQ
-    M = params['pq_m']
-    nbits = params['pq_nbits']
-    pq_index = faiss.IndexPQ(D, M, nbits)
-    start = time.perf_counter()
-    pq_index.train(embeddings)
-    pq_index.add(embeddings)
-    times['pq_training'] = (time.perf_counter() - start) * 1000
-    indices['pq'] = pq_index
-    
-    # IVF-PQ
-    ivfpq_index = faiss.IndexIVFPQ(quantizer, D, params['ivfpq_nlist'], params['ivfpq_m'], params['ivfpq_nbits'])
-    start = time.perf_counter()
-    ivfpq_index.train(embeddings)
-    ivfpq_index.add(embeddings)
-    times['ivfpq_training'] = (time.perf_counter() - start) * 1000
-    ivfpq_index.nprobe = params['ivfpq_nprobe']
-    indices['ivfpq'] = ivfpq_index
-    
-    # HNSW
-    hnsw_index = faiss.IndexHNSWFlat(D, params['hnsw_m'])
-    start = time.perf_counter()
-    hnsw_index.add(embeddings)
-    times['hnsw'] = (time.perf_counter() - start) * 1000
-    indices['hnsw'] = hnsw_index
-    
-    return indices, times
-
 # Define metric calculation functions as per the notebook
 def calculate_accuracy_at_k(ground_truth_indices, predicted_indices):
     correct = 0
@@ -198,6 +146,14 @@ hnsw_m = st.sidebar.slider("M (number of neighbors)", min_value=4, max_value=64,
 # Rebuild indices button
 rebuild = st.sidebar.button("🔄 Rebuild Indices", type="primary")
 
+# Search button
+search_button = st.sidebar.button("🔍 Search", type="primary")
+
+st.sidebar.markdown("---")
+st.sidebar.header("📊 Index Info")
+st.sidebar.write(f"Number of books: {N}")
+st.sidebar.write(f"Embedding dimension: {D}")
+
 # Collect all parameters
 index_params = {
     'ivf_nlist': ivf_nlist,
@@ -211,15 +167,62 @@ index_params = {
     'hnsw_m': hnsw_m
 }
 
-st.sidebar.markdown("---")
-st.sidebar.header("📊 Index Info")
-st.sidebar.write(f"Number of books: {N}")
-st.sidebar.write(f"Embedding dimension: {D}")
+# Create FAISS indices with configurable parameters
+@st.cache_resource
+def create_indices(embeddings, D, params):
+    indices = {}
+    times = {}
+    
+    # KNN (Ground Truth)
+    start = time.perf_counter()
+    knn_index = faiss.IndexFlatL2(D)
+    knn_index.add(embeddings)
+    times['knn'] = (time.perf_counter() - start) * 1000
+    indices['knn'] = knn_index
+    
+    # IVF
+    nlist = params['ivf_nlist']
+    quantizer = faiss.IndexFlatL2(D)
+    ivf_index = faiss.IndexIVFFlat(quantizer, D, nlist, faiss.METRIC_L2)
+    start = time.perf_counter()
+    ivf_index.train(embeddings)
+    ivf_index.add(embeddings)
+    times['ivf_training'] = (time.perf_counter() - start) * 1000
+    ivf_index.nprobe = params['ivf_nprobe']
+    indices['ivf'] = ivf_index
+    
+    # PQ
+    M = params['pq_m']
+    nbits = params['pq_nbits']
+    pq_index = faiss.IndexPQ(D, M, nbits)
+    start = time.perf_counter()
+    pq_index.train(embeddings)
+    pq_index.add(embeddings)
+    times['pq_training'] = (time.perf_counter() - start) * 1000
+    indices['pq'] = pq_index
+    
+    # IVF-PQ
+    ivfpq_index = faiss.IndexIVFPQ(quantizer, D, params['ivfpq_nlist'], params['ivfpq_m'], params['ivfpq_nbits'])
+    start = time.perf_counter()
+    ivfpq_index.train(embeddings)
+    ivfpq_index.add(embeddings)
+    times['ivfpq_training'] = (time.perf_counter() - start) * 1000
+    ivfpq_index.nprobe = params['ivfpq_nprobe']
+    indices['ivfpq'] = ivfpq_index
+    
+    # HNSW
+    hnsw_index = faiss.IndexHNSWFlat(D, params['hnsw_m'])
+    start = time.perf_counter()
+    hnsw_index.add(embeddings)
+    times['hnsw'] = (time.perf_counter() - start) * 1000
+    indices['hnsw'] = hnsw_index
+    
+    return indices, times
 
 # Create or rebuild indices
 indices, index_times = create_indices(embeddings, D, index_params)
 
-# Main content
+# Main content - Check if any action triggered
 if search_button or user_query or rebuild:
     # Encode query
     query_embedding = model.encode([user_query], convert_to_numpy=True).astype("float32")
