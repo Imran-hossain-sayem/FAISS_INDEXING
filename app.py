@@ -129,14 +129,40 @@ ivf_nprobe = st.sidebar.slider("nprobe (number of clusters to search)", min_valu
 
 # PQ Parameters
 st.sidebar.subheader("PQ Parameters")
-pq_m = st.sidebar.slider("M (number of sub-quantizers)", min_value=2, max_value=16, value=8, step=2, key="pq_m")
-pq_nbits = st.sidebar.slider("nbits (bits per sub-quantizer)", min_value=4, max_value=8, value=4, key="pq_nbits")
+# Get valid M values (must divide D=384)
+valid_m_values = [2, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128, 192]
+valid_m_values = [m for m in valid_m_values if D % m == 0]
+default_m = 8 if 8 in valid_m_values else valid_m_values[0]
+
+pq_m = st.sidebar.select_slider(
+    "M (number of sub-quantizers)", 
+    options=valid_m_values,
+    value=default_m,
+    key="pq_m"
+)
+
+pq_nbits = st.sidebar.select_slider(
+    "nbits (bits per sub-quantizer)", 
+    options=[4, 8],
+    value=4,
+    key="pq_nbits"
+)
 
 # IVF-PQ Parameters
 st.sidebar.subheader("IVF-PQ Parameters")
 ivfpq_nlist = st.sidebar.slider("nlist", min_value=1, max_value=20, value=4, key="ivfpq_nlist")
-ivfpq_m = st.sidebar.slider("M", min_value=2, max_value=16, value=8, step=2, key="ivfpq_m")
-ivfpq_nbits = st.sidebar.slider("nbits", min_value=4, max_value=8, value=4, key="ivfpq_nbits")
+ivfpq_m = st.sidebar.select_slider(
+    "M (must divide D={})".format(D),
+    options=valid_m_values,
+    value=default_m,
+    key="ivfpq_m"
+)
+ivfpq_nbits = st.sidebar.select_slider(
+    "nbits", 
+    options=[4, 8],
+    value=4,
+    key="ivfpq_nbits"
+)
 ivfpq_nprobe = st.sidebar.slider("nprobe", min_value=1, max_value=10, value=2, key="ivfpq_nprobe")
 
 # HNSW Parameters
@@ -153,6 +179,7 @@ st.sidebar.markdown("---")
 st.sidebar.header("📊 Index Info")
 st.sidebar.write(f"Number of books: {N}")
 st.sidebar.write(f"Embedding dimension: {D}")
+st.sidebar.write(f"Valid M values: {', '.join(map(str, valid_m_values))}")
 
 # Collect all parameters
 index_params = {
@@ -202,13 +229,20 @@ def create_indices(embeddings, D, params):
     indices['pq'] = pq_index
     
     # IVF-PQ
-    ivfpq_index = faiss.IndexIVFPQ(quantizer, D, params['ivfpq_nlist'], params['ivfpq_m'], params['ivfpq_nbits'])
-    start = time.perf_counter()
-    ivfpq_index.train(embeddings)
-    ivfpq_index.add(embeddings)
-    times['ivfpq_training'] = (time.perf_counter() - start) * 1000
-    ivfpq_index.nprobe = params['ivfpq_nprobe']
-    indices['ivfpq'] = ivfpq_index
+    try:
+        ivfpq_index = faiss.IndexIVFPQ(quantizer, D, params['ivfpq_nlist'], params['ivfpq_m'], params['ivfpq_nbits'])
+        start = time.perf_counter()
+        ivfpq_index.train(embeddings)
+        ivfpq_index.add(embeddings)
+        times['ivfpq_training'] = (time.perf_counter() - start) * 1000
+        ivfpq_index.nprobe = params['ivfpq_nprobe']
+        indices['ivfpq'] = ivfpq_index
+    except Exception as e:
+        st.sidebar.error(f"IVF-PQ creation failed: {str(e)}")
+        # Fallback to IVF if IVF-PQ fails
+        st.sidebar.warning("Falling back to IVF for IVF-PQ index")
+        indices['ivfpq'] = ivf_index
+        times['ivfpq_training'] = times['ivf_training']
     
     # HNSW
     hnsw_index = faiss.IndexHNSWFlat(D, params['hnsw_m'])
@@ -458,10 +492,10 @@ st.markdown("""
 
 **Adjustable Parameters:**
 - **IVF**: nlist (number of clusters), nprobe (clusters to search)
-- **PQ**: M (number of sub-quantizers), nbits (bits per sub-quantizer)
-- **IVF-PQ**: nlist, M, nbits, nprobe
+- **PQ**: M (number of sub-quantizers - must divide D={}), nbits (bits per sub-quantizer)
+- **IVF-PQ**: nlist, M (must divide D), nbits, nprobe
 - **HNSW**: M (number of neighbors)
-""")
+""".format(D))
 
 # Display all books in expander
 with st.expander("📚 View All Books"):
