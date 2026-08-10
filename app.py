@@ -92,9 +92,9 @@ texts, book_names, embeddings, model = create_embeddings(books)
 
 N, D = embeddings.shape
 
-# Create FAISS indices
+# Create FAISS indices with configurable parameters
 @st.cache_resource
-def create_indices(embeddings, D):
+def create_indices(embeddings, D, params):
     indices = {}
     times = {}
     
@@ -106,19 +106,19 @@ def create_indices(embeddings, D):
     indices['knn'] = knn_index
     
     # IVF
-    nlist = 4
+    nlist = params['ivf_nlist']
     quantizer = faiss.IndexFlatL2(D)
     ivf_index = faiss.IndexIVFFlat(quantizer, D, nlist, faiss.METRIC_L2)
     start = time.perf_counter()
     ivf_index.train(embeddings)
     ivf_index.add(embeddings)
     times['ivf_training'] = (time.perf_counter() - start) * 1000
-    ivf_index.nprobe = 2
+    ivf_index.nprobe = params['ivf_nprobe']
     indices['ivf'] = ivf_index
     
     # PQ
-    M = 8
-    nbits = 4
+    M = params['pq_m']
+    nbits = params['pq_nbits']
     pq_index = faiss.IndexPQ(D, M, nbits)
     start = time.perf_counter()
     pq_index.train(embeddings)
@@ -127,24 +127,22 @@ def create_indices(embeddings, D):
     indices['pq'] = pq_index
     
     # IVF-PQ
-    ivfpq_index = faiss.IndexIVFPQ(quantizer, D, nlist, M, nbits)
+    ivfpq_index = faiss.IndexIVFPQ(quantizer, D, params['ivfpq_nlist'], params['ivfpq_m'], params['ivfpq_nbits'])
     start = time.perf_counter()
     ivfpq_index.train(embeddings)
     ivfpq_index.add(embeddings)
     times['ivfpq_training'] = (time.perf_counter() - start) * 1000
-    ivfpq_index.nprobe = 2
+    ivfpq_index.nprobe = params['ivfpq_nprobe']
     indices['ivfpq'] = ivfpq_index
     
     # HNSW
-    hnsw_index = faiss.IndexHNSWFlat(D, 32)
+    hnsw_index = faiss.IndexHNSWFlat(D, params['hnsw_m'])
     start = time.perf_counter()
     hnsw_index.add(embeddings)
     times['hnsw'] = (time.perf_counter() - start) * 1000
     indices['hnsw'] = hnsw_index
     
     return indices, times
-
-indices, index_times = create_indices(embeddings, D)
 
 # Define metric calculation functions as per the notebook
 def calculate_accuracy_at_k(ground_truth_indices, predicted_indices):
@@ -167,19 +165,62 @@ def calculate_recall_at_k(ground_truth_indices, predicted_indices):
     intersection = ground_truth_set & predicted_set
     return len(intersection) / len(ground_truth_set)
 
-# Sidebar
+# Sidebar - Search Settings
 st.sidebar.header("🔍 Search Settings")
 user_query = st.sidebar.text_input("Enter your book query:", value="A book about science")
 K = st.sidebar.slider("Number of books to retrieve (K):", min_value=1, max_value=10, value=5)
-search_button = st.sidebar.button("🔍 Search", type="primary")
+
+# Sidebar - Index Parameters
+st.sidebar.markdown("---")
+st.sidebar.header("⚙️ Index Parameters")
+
+# IVF Parameters
+st.sidebar.subheader("IVF Parameters")
+ivf_nlist = st.sidebar.slider("nlist (number of clusters)", min_value=1, max_value=20, value=4, key="ivf_nlist")
+ivf_nprobe = st.sidebar.slider("nprobe (number of clusters to search)", min_value=1, max_value=10, value=2, key="ivf_nprobe")
+
+# PQ Parameters
+st.sidebar.subheader("PQ Parameters")
+pq_m = st.sidebar.slider("M (number of sub-quantizers)", min_value=2, max_value=16, value=8, step=2, key="pq_m")
+pq_nbits = st.sidebar.slider("nbits (bits per sub-quantizer)", min_value=4, max_value=8, value=4, key="pq_nbits")
+
+# IVF-PQ Parameters
+st.sidebar.subheader("IVF-PQ Parameters")
+ivfpq_nlist = st.sidebar.slider("nlist", min_value=1, max_value=20, value=4, key="ivfpq_nlist")
+ivfpq_m = st.sidebar.slider("M", min_value=2, max_value=16, value=8, step=2, key="ivfpq_m")
+ivfpq_nbits = st.sidebar.slider("nbits", min_value=4, max_value=8, value=4, key="ivfpq_nbits")
+ivfpq_nprobe = st.sidebar.slider("nprobe", min_value=1, max_value=10, value=2, key="ivfpq_nprobe")
+
+# HNSW Parameters
+st.sidebar.subheader("HNSW Parameters")
+hnsw_m = st.sidebar.slider("M (number of neighbors)", min_value=4, max_value=64, value=32, step=4, key="hnsw_m")
+
+# Rebuild indices button
+rebuild = st.sidebar.button("🔄 Rebuild Indices", type="primary")
+
+# Collect all parameters
+index_params = {
+    'ivf_nlist': ivf_nlist,
+    'ivf_nprobe': ivf_nprobe,
+    'pq_m': pq_m,
+    'pq_nbits': pq_nbits,
+    'ivfpq_nlist': ivfpq_nlist,
+    'ivfpq_m': ivfpq_m,
+    'ivfpq_nbits': ivfpq_nbits,
+    'ivfpq_nprobe': ivfpq_nprobe,
+    'hnsw_m': hnsw_m
+}
 
 st.sidebar.markdown("---")
 st.sidebar.header("📊 Index Info")
 st.sidebar.write(f"Number of books: {N}")
 st.sidebar.write(f"Embedding dimension: {D}")
 
+# Create or rebuild indices
+indices, index_times = create_indices(embeddings, D, index_params)
+
 # Main content
-if search_button or user_query:
+if search_button or user_query or rebuild:
     # Encode query
     query_embedding = model.encode([user_query], convert_to_numpy=True).astype("float32")
     
@@ -323,10 +364,9 @@ if search_button or user_query:
         fig.update_layout(height=400)
         st.plotly_chart(fig, use_container_width=True)
     
-    # Add Recall@K visualization
+    # Recall@K visualization
     st.subheader("📈 Recall@K Comparison")
     
-    # Create a bar chart for Recall@K
     recall_data = {}
     for name, metric in metrics.items():
         recall_data[name] = metric['recall']
@@ -350,7 +390,7 @@ if search_button or user_query:
         )
         st.plotly_chart(fig_recall, use_container_width=True)
     
-    # Add Precision@K visualization
+    # Precision@K visualization
     st.subheader("📈 Precision@K Comparison")
     
     precision_data = {}
@@ -375,6 +415,32 @@ if search_button or user_query:
             height=300
         )
         st.plotly_chart(fig_precision, use_container_width=True)
+    
+    # Index training time comparison
+    st.subheader("⏱️ Index Training Time Comparison")
+    
+    training_times = {}
+    for name, time_val in index_times.items():
+        if 'training' in name or name in ['knn', 'hnsw']:
+            training_times[name] = time_val
+    
+    if training_times:
+        fig_training = go.Figure(data=[
+            go.Bar(
+                x=list(training_times.keys()),
+                y=list(training_times.values()),
+                text=[f"{t:.2f}ms" for t in training_times.values()],
+                textposition='auto',
+                marker_color=['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
+            )
+        ])
+        fig_training.update_layout(
+            title="Index Training Time Comparison",
+            xaxis_title="Index Type",
+            yaxis_title="Time (ms)",
+            height=300
+        )
+        st.plotly_chart(fig_training, use_container_width=True)
 
 # Add information at bottom
 st.markdown("---")
@@ -386,6 +452,12 @@ st.markdown("""
 - **Precision@K**: Fraction of retrieved items that are relevant (in ground truth)
 - **Recall@K**: Fraction of relevant items that were retrieved
 - **Accuracy@K**: Whether the retrieved set exactly matches the ground truth
+
+**Adjustable Parameters:**
+- **IVF**: nlist (number of clusters), nprobe (clusters to search)
+- **PQ**: M (number of sub-quantizers), nbits (bits per sub-quantizer)
+- **IVF-PQ**: nlist, M, nbits, nprobe
+- **HNSW**: M (number of neighbors)
 """)
 
 # Display all books in expander
